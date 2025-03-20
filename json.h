@@ -1,7 +1,17 @@
 #ifndef JSON_H
 #define JSON_H
 
+#include <stdbool.h>
 #include <stddef.h>
+
+#ifndef JSON_READ_VALUE_BUFFER_SIZE
+#define JSON_READ_VALUE_BUFFER_SIZE 128ULL
+#endif
+
+// This macro will control the size of the small string optimization
+#ifndef JSON_SMALL_STRING_OPTIMIZATION_SIZE
+#define JSON_SMALL_STRING_OPTIMIZATION_SIZE 8
+#endif
 
 // This is a convenience function for printing JSON tokens
 #ifndef JSON_FMT_TOKEN
@@ -25,7 +35,8 @@
 // element of a JSON can only take one of these
 // values at a time.
 typedef enum {
-	JSON_TOKEN_STRING = 200,
+	JSON_TOKEN_LARGE_STRING = 200,
+	JSON_TOKEN_SMALL_STRING,
 	JSON_TOKEN_INTEGER,
 	JSON_TOKEN_DOUBLE,
 	JSON_TOKEN_CURLY_OPEN,
@@ -45,9 +56,10 @@ typedef enum {
 	JSON_OBJECT,
 	JSON_ARRAY,
 	JSON_INTEGER,
-	JSON_DOUBLE,
-	JSON_STRING,
-	JSON_BOOL,
+	JSON_NUMBER,
+	JSON_LARGE_STRING,
+	JSON_SHORT_STRING,
+	JSON_BOOLEAN,
 	JSON_NULL
 } json_value_type;
 
@@ -72,14 +84,6 @@ typedef struct {
 	json_token_t *token;
 } json_token_array_t;
 
-// This structure holds a generic JSON value. THis
-// could be a JSON object, a JSON array, a number,
-// a string, a boolean, or a NULL.
-typedef struct {
-	json_value_type type;
-	void *data;
-} json_value_t;
-	
 typedef struct {
 	char *key;
 	json_value_t *value;
@@ -96,6 +100,42 @@ typedef struct {
 	size_t capacity;
 	json_value_t *content;
 } json_array_t;
+
+// This structure holds a generic JSON value. THis
+// could be a JSON object, a JSON array, a number,
+// a string, a boolean, or a NULL.
+typedef struct {
+	json_value_type type;
+	union {
+		// Beacuse I am using a 64-bit system, I will
+		// use 8-bytes as the small string optimization
+		// size. These strings will not have their
+		// own memory, but will live in the object.
+		// This choice is motivated by the fact that the
+		// union will expand to the largest sized type in
+		// it, which I anticipate are the pointers.
+		// Thus, we will size the small strings such that
+		// they are equal but not greater in size than
+		// the pointers.
+		// 
+		// Strings larger than 8-bytes will go into
+		// large string, and be allocated their own
+		// space.
+		// 
+		// TODO: Check if a system is 64- or 32-bit
+		// at compile time and use this to inform the
+		// union what the optimal size is for the small
+		// string optization tricks.
+		char *large_string;
+		char[JSON_SMALL_STRING_OPTIMIZATION_SIZE] small_string;
+
+		bool boolean;
+		int integer;
+		double number;
+		json_array_t* array;
+		json_object_t* object;
+	}
+} json_value_t;
 
 extern void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size);
 extern json_token_array_t *json_lexer(const char *json_data, size_t json_size);

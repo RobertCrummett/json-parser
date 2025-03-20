@@ -1,10 +1,14 @@
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include "json.h"
+
+// Here is the memory allocated for reading small values of memory
+// out of JSON tokens and into JSON values
+static char json_read_value_buffer[JSON_READ_VALUE_BUFFER_SIZE] = {0};
 
 // This is the JSON lexer. Its job is to translate
 // the string data in `json_data` into a token array,
@@ -80,7 +84,6 @@ json_token_array_t *json_lexer(const char *json_data, size_t json_size) {
 				break;
 			case '"':
 				// This points at the first character of the string
-				current_token.identity = JSON_TOKEN_STRING;
 				current_token.start = (char *)json_data;
 				
 				// Now continue stepping through the string until we
@@ -94,6 +97,13 @@ json_token_array_t *json_lexer(const char *json_data, size_t json_size) {
 				// closing quote, we need to rewind one to get the
 				// proper ending location - the final quote.
 				current_token.end = (char *)json_data - 1;
+
+				// Decide the identity of the string based on
+				// its size. This is done to improve cache performance
+				if (current_token.end - current_token.start + 1 > JSON_SMALL_STRING_OPTIMIZATION_SIZE) {
+					current_token.identity = JSON_TOKEN_LARGE_STRING;
+				else
+					current_token.identity = JSON_TOKEN_SMALL_STRING;
 				break;
 			case ':':
 				current_token.identity = JSON_TOKEN_COLON;
@@ -232,7 +242,8 @@ void json_print(json_token_array_t *tokens) {
 	// the proper print statement.
 	for (size_t i = 0; i < tokens->count; i++)
 		switch (tokens->token[i].identity) {
-			case JSON_TOKEN_STRING:
+			case JSON_TOKEN_LARGE_STRING:
+			case JSON_TOKEN_SMALL_STRING:
 				printf("\"%.*s\"", JSON_FMT_TOKEN(tokens->token[i]));
 				break;
 			case JSON_TOKEN_INTEGER:
@@ -384,30 +395,259 @@ void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) 
 	(*data)[used] = '\0';
 }
 
+static json_value_t *json_parse_long_string(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON large string value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON large string value: %s\n", strerror(errno));
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	value->type = JSON_LARGE_STRING;
+
+	// When I allocate new space for the large string, I need to also
+	// allocate one extra byte for the null terminator '\0' because
+	// I want to use c strings in this setting
+	size_t size = token.end - token.start;
+	value->type = JSON_STRING;
+	value->large_string = malloc((size + 1) * sizeof(char));
+	if (value->large_string == NULL) {
+		fprintf(stderr, "Failed to allocate the large string in a JSON large string value: %s\n", strerror(errno));
+		json_free_token_array(tokens);
+		free(value);
+		return NULL;
+	}
+
+	// Move the contents from the JSON data string
+	// into the new object and finally set the last
+	// character in the allocated space to the null
+	// terminator '\0'
+	memcpy(value->large_string, token.start, size);
+	value->large_string[size] = '\0';
+
+	// Finally, step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
+static json_value_t *json_parse_small_string(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON small string value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON small string value: %s\n", strerror(errno));
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	value->type = JSON_SMALL_STRING;
+
+	// Move the contents from the JSON data string
+	// into the new object and finally set the last
+	// character in the allocated space to the null
+	// terminator '\0'
+	size_t size = token.end - token.start;
+	memcpy(value->small_string, token.start, size);
+	value->small_string[size] = '\0';
+
+	// Finally, step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
+static json_value_t *json_parse_integer(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON integer value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON integer value: %s\n", strerror(errno));
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	value->type = JSON_INTEGER;
+
+	// Now time to extract the integer from the JSON data string.
+	// Begin by creating a temporary buffer and reading the characters
+	// representing the integer into it.
+	size_t size = token.end - token.start;
+	if (size >= JSON_VALUE_READ_BUFFER_SIZE) {
+		fprintf(stderr, "Wow, I never thought this error would happen.\n"
+				"You have just overflowed the temporary read buffer with an integer.\n"
+				"Please adjust the value of JSON_VALUE_READ_BUFFER to reflect the size of the largest integer in your JSON file in characters.\n"
+				"A token value of size %zu bytes just overflowed the default buffer of size %d bytes.", size, JSON_READ_VALUE_BUFFER_SIZE);
+		free(value);
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	memcpy(json_value_read_buffer, token.start, size);
+	json_value_read_buffer[size] = '\0';
+	value->integer = atoi(json_value_read_buffer);
+
+	// Finally, step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
+static json_value_t *json_parse_number(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON number (double) value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON number value: %s\n", strerror(errno));
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	value->type = JSON_NUMBER;
+
+	// Now time to extract the integer from the JSON data string.
+	// Begin by creating a temporary buffer and reading the characters
+	// representing the double into it.
+	size_t size = token.end - token.start;
+	if (size >= JSON_VALUE_READ_BUFFER_SIZE) {
+		fprintf(stderr, "Wow, I never thought this error would happen.\n"
+				"You have just overflowed the temporary read buffer with an double.\n"
+				"Please adjust the value of JSON_VALUE_READ_BUFFER to reflect the size of the largest double in your JSON file in characters.\n"
+				"A token value of size %zu bytes just overflowed the default buffer of size %d bytes.", size, JSON_READ_VALUE_BUFFER_SIZE);
+		free(value);
+		json_free_token_array(tokens);
+		return NULL;
+	}
+	memcpy(json_value_read_buffer, token.start, size);
+	json_value_read_buffer[size] = '\0';
+	value->number = atof(json_value_read_buffer);
+
+	// Finally, step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
+static json_value_t *json_parse_boolean(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON boolean value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON boolean value: %s\n", strerror(errno));
+		json_free_token_array(tokens);	
+		return NULL;
+	}
+	value->type = JSON_BOOLEAN;
+
+	if (*token.start == 't')
+		value->boolean = true;
+	else
+		value->boolean = false;
+
+	// Finally, step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
+static json_value_t *json_parse_null(json_token_array_t **tokens) {
+	// This is the current token that we are parsing
+	json_token_t token = *(*tokens)->token;
+
+	// Create a new JSON null value
+	json_value_t *value = malloc(sizeof *value);
+	if (value == NULL) {
+		fprintf(stderr, "Failed to allocate a JSON boolean value: %s\n", strerror(errno));
+		json_free_token_array(tokens);	
+		return NULL;
+	}
+	value->type = JSON_NULL;
+
+	// Literally do not do anything else because the identity give away
+	// everything about this variable - in other words, no need to store
+	// anything.
+	// Step the tokens one step forward
+	(*tokens)++;
+	return value;
+}
+
 json_value_t *json_parser(json_token_array_t *tokens) {
 	// For each token in the tokens array, match its identity to
 	// the proper print statement.
-	for (size_t i = 0; i < tokens->count; i++)
-		switch (tokens->token[i].identity) {
-			case JSON_TOKEN_STRING:
-				printf("\"%.*s\"", JSON_FMT_TOKEN(tokens->token[i]));
+	size_t token_index = 0;
+	size_t number_of_tokens = tokens->count;
+	while (number_of_tokens > token_index) {
+		json_token_t token = tokens->token[token_index];
+		//
+		// TODO: Figure out how to increment token_index between function calls
+		//
+		switch (token.identity) {
+			case JSON_TOKEN_CURLY_OPEN:
+				break;
+			case JSON_TOKEN_SQUARE_OPEN:
+				break;
+			case JSON_TOKEN_LARGE_STRING:
+				json_value_t *value = json_parse_large_string(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the large string failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
+				break;
+			case JSON_TOKEN_SMALL_STRING:
+				json_value_t *value = json_parse_small_string(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the small string failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
 				break;
 			case JSON_TOKEN_INTEGER:
+				json_value_t *value = json_parse_integer(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the integer failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
+				break;
 			case JSON_TOKEN_DOUBLE:
-			case JSON_TOKEN_CURLY_OPEN:
-			case JSON_TOKEN_CURLY_CLOSE:
-			case JSON_TOKEN_SQUARE_OPEN:
-			case JSON_TOKEN_SQUARE_CLOSE:
-			case JSON_TOKEN_COLON:
-			case JSON_TOKEN_COMMA:
+				json_value_t *value = json_parse_number(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the number failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
+				break;
 			case JSON_TOKEN_BOOL:
+				json_value_t *value = json_parse_boolean(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the boolean failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
+				break;
 			case JSON_TOKEN_NULL:
+				json_value_t *value = json_parse_null(&tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Oh no, parsing the boolean failed! Cleaning up everything...\n");
+					// TODO: clean up everything
+					return NULL;
+				}
+				break;
 			case JSON_TOKEN_WHITESPACE:
-				printf("%.*s", JSON_FMT_TOKEN(tokens->token[i]));
+				// Skip any white space in between other tokens
+				tokens++;
 				break;
 			default:
-				fprintf(stderr, "\nUnexpected identity code recieved: %d\n", tokens->token[i].identity);
-				return;
+				fprintf(stderr, "\nUnexpected identity code recieved: %d\n", token.identity);
+				// TODO: Clean up allocated values
+				return NULL;
 		}
+	}
+
+	// Clean up all of the tokens
+	json_free_token_array(&tokens);
 	return NULL;
 }
