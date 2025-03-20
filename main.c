@@ -5,11 +5,16 @@
 #include <string.h>
 #include "json.h"
 
-int main(void) {
+int main(int argc, char **argv) {
 	// We are going to begin by reading the contents of a file into a string
 	// If the returned data is NULL and the size is 0, then there was some
 	// sort of error reading the file into the string.
-	const char *json_path = "share/sample1.json";
+	char *json_path = {0};
+	if (argc == 2)
+		json_path = argv[1];
+	else
+		json_path = "share/ex01.json";
+
 	char *json_data = NULL;
 	size_t json_size = 0;
 
@@ -22,7 +27,7 @@ int main(void) {
 	// Tokenize the JSON string and output the contents into the token_array.
 	// This function may fail while resizing the JSON token array.
 	// If it does, it will a null array.
-	json_token_array_t *tokens = json_lexer(json_data, json_size);
+	json_token_t *tokens = json_lexer(json_data, json_size);
 	if (tokens == NULL) {
 		fprintf(stderr, "The JSON lexer failed to resize the dynamic array!\n");
 		return 1;
@@ -32,7 +37,7 @@ int main(void) {
 	json_print(tokens);
 
 	// Cleanup the token array at the end
-	json_free_token_array(&tokens);
+	json_free_all_the_tokens(&tokens);
 
 	return 0;
 }
