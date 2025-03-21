@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "json.h"
 
 int main(int argc, char **argv) {
@@ -33,11 +34,11 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 	
-	// Print the value of the tokens to the standard output
-	json_print(tokens);
+	// Parse the token stream and output a conglomerate data structure
+	// holding all of the information from the JSON
+	json_value_t *json = json_parser(tokens);
 
 	// Cleanup the token array at the end
 	json_free_all_the_tokens(&tokens);
-
 	return 0;
 }
