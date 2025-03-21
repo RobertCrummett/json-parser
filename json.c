@@ -537,15 +537,16 @@ json_value_t *json_parser(json_token_t *tokens) {
 		json_free_all_the_tokens(&tokens);
 		return NULL;
 	}
+	json_value_t *current_element = elements;
 
 	switch (tokens->identity) {
 		// This is the case when we parse JSON objects. This will
 		// call `json_parser` recusively.
 		case JSON_TOKEN_CURLY_OPEN:
-			elements->identity = JSON_OBJECT;
-			elements->next = NULL;
-			elements->key = NULL;
-			elements->value = NULL;
+			current_element->identity = JSON_OBJECT;
+			current_element->next = NULL;
+			current_element->key = NULL;
+			current_element->value = NULL;
 
 			// Get the next token after the opening curly
 			json_pop_a_token(&tokens);
@@ -568,11 +569,83 @@ json_value_t *json_parser(json_token_t *tokens) {
 					json_free_all_the_values(&elements);
 					return NULL;
 				}
+				current_element->key = json_parser(tokens);
+				if (current_element->key == NULL) {
+					fprintf(stderr, "The string for the key was not successfully read. Aborting!\n");
+					json_free_all_the_tokens(&tokens);
+					json_free_all_the_values(&elements);
+					return NULL;
+				}
 
-				elements->key = json_parser(tokens);
-				
+				// After the string, there is optional room for whitespace
+				// characters and then there comes a colon
+				json_gobble_whitespace(&tokens);
+				if (tokens->identity != JSON_TOKEN_COLON) {
+					fprintf(stderr, "The object expected a colon, but this was not found! We recieved an object with key code %d\n", tokens->identity);
+					json_free_all_the_tokens(&tokens);
+					json_free_all_the_values(&elements);
+					return NULL;
+				}
+				json_pop_a_token(&tokens);
+				json_gobble_whitespace(&tokens);
+
+				// Now the following token should be a value of some sort
+				current_element->value = json_parser(tokens);
+				if (current_element->value == NULL) {
+					fprintf(stderr, "The string for the value was not successfully read. Aborting!\n");
+					json_free_all_the_tokens(&tokens);
+					json_free_all_the_values(&elements);
+					return NULL;
+				}
+				json_gobble_whitespace(&tokens);
+
+				// Now there is the possibility that either the
+				// object ends or the object continues. In the former
+				// case, the next key will not be a comma. In the
+				// latter case, the next key will be a comma. I will
+				// use this condition to decide whether to keep parsing this value or not.
+
+				if (tokens->identity == JSON_TOKENS_COMMA) {
+					// So there are more values in the object.
+					// Therefore, allocate more space for the
+					// next object (current_element->next) and
+					// then move the pointer `current_element`
+					// to this new object.
+					json_value_t *current_element->next = malloc(sizeof *current_element->next);
+					if (current_element->next == NULL) {
+						fprintf(stderr, "Failed to allocate a new value!\n");
+						json_free_all_the_tokens(&tokens);
+						json_free_all_the_values(&elements);
+						return NULL;
+					}
+					current_element = current_element->next;
+
+					current_element->identity = JSON_OBJECT;
+					current_element->next = NULL;
+					current_element->key = NULL;
+					current_element->value = NULL;
+
+					// Then prepare for the next iteration by lining ourselves up with
+					// the next key
+					json_pop_a_token(&tokens);
+					json_gobble_whitespace(&tokens);
+
+				} else if (tokens->identity == JSON_TOKENS_CURLY_CLOSE) {
+					// This means that the object is finished. We can simply discard
+					// the closing curly and move onto better things.
+					json_pop_a_token(&tokens);
+					break;
+
+				} else {
+					fprintf(stderr, "Expected a comma or a colon but got something else! Aborting...\n");
+					json_free_all_the_tokens(&tokens);
+					json_free_all_the_values(&elements);
+					return NULL;
+				}
 			}
 			break;
+		// This is the JSON array case. Like the JSON objects,
+		// this will call `json_parser` recursively
 		case JSON_TOKEN_SQUARE_OPEN:
 			break;
 		case JSON_TOKEN_STRING:
@@ -586,6 +659,7 @@ json_value_t *json_parser(json_token_t *tokens) {
 		default:
 			fprintf(stderr, "Encountered an unexpected token!\n");
 			json_free_all_the_tokens(&tokens);
+			json_free_all_the_values(&elements);
 			return NULL;
 	}
 
