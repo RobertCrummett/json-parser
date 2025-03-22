@@ -401,6 +401,49 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 	return tokens;
 }
 
+static void json_print_token_error(json_token_t *token) {
+	// The NULL token case
+	if (token == NULL) {
+		fprintf(stderr, "Token is NULL\n");
+	}
+	
+	switch (token->identity) {
+		case JSON_TOKEN_STRING:
+			fprintf(stderr, "The string token \"%.*s\"", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_NUMBER:
+			fprintf(stderr, "The number token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_CURLY_OPEN:
+			fprintf(stderr, "The opening brace token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_CURLY_CLOSE:
+			fprintf(stderr, "The closing brace token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_SQUARE_OPEN:
+			fprintf(stderr, "The opening bracket token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_SQUARE_CLOSE:
+			fprintf(stderr, "The closing bracket token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_COLON:
+			fprintf(stderr, "The colon token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_COMMA:
+			fprintf(stderr, "The comma token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_BOOLEAN:
+			fprintf(stderr, "The boolean token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_NULL:
+			fprintf(stderr, "The null token %.*s", JSON_FMT_TOKEN(*token));
+			break;
+		case JSON_TOKEN_WHITESPACE:
+			fprintf(stderr, "The whitespace token "); 
+			break;
+	}
+}
+
 void json_print_tokens(json_token_t *token) {
 	// For each token, we will test its identity and print its value
 	// to the standard output accordingly.
@@ -449,104 +492,137 @@ void json_gobble_whitespace(json_token_t **tokens) {
 		*tokens = (*tokens)->next;
 }
 
-json_value_t *json_parser(json_token_t *tokens) {
-	json_print_tokens(tokens);
-	static char parse_buffer[256] = {0};
-
-	json_value_t *value = malloc(sizeof *value);
-	if (value == NULL) {
-		fprintf(stderr, "Failed to allocate a new JSON value while parsing!\n");
+static const char *json_string_view_to_cstring(char *start, char *end) {
+	// First allocate enough mempory to hold all of the characters in the original
+	// string AND a final null terminator (+1)
+	size_t size = end - start;
+	const char *cstring = malloc((size + 1) * sizeof *cstring);
+	if (cstring == NULL) {
+		fprintf(stderr, "Failed to allocate space for a new cstring: %s\n", strerror(errno));
 		return NULL;
 	}
 
+	// Copy the contents of the string view (start) into the new
+	// memory of the c style string. There is a maximum of size
+	// characters in the view, so do not copy any more than that.
+	strncpy(cstring, start, size);
+	cstring[size] = '\0';
+	return cstring;
+}
+
+json_value_t *json_parser(json_token_t *tokens) {
+	// If there are no tokens, there is no work to do
+	if (tokens == NULL)
+		return;
+
+	// And if there is only whitespace tokens, there is
+	// no work to do
 	json_gobble_whitespace(&tokens);
+	if (tokens == NULL)
+		return;
+
+	// There must be productive tokens at this point.
+	// Create a new element that will store the contents
+	// held by the tokens we parse
+	json_value_t *element = malloc(sizeof *element);
+	if (element == NULL) {
+		fprintf(stderr, "Failed to allocate space for a new element of the JSON structure: %s\n", strerror(errno));
+		return NULL;
+	}
+
+	// Parse the token
 	while (tokens != NULL) {
 		switch (tokens->identity) {
+			// In this case the element is a JSON object
 			case JSON_TOKEN_CURLY_OPEN:
-				value->identity = JSON_OBJECT;
-				value->object = json_create_object(4);
-				
+				element->identity = JSON_OBJECT;
+				element->object = json_create_object(2);
+
 				// Now step to the next token and eat up all
 				// of the optional whitespace
 				tokens = tokens->next;
 				json_gobble_whitespace(&tokens);
-				
-				// Now we expect to see a key. On the happy path,
-				// we will simply copy the contents of this string
+
+				// We expect to see a key. On the happy path,
+				// we will simply copy the contents of the string view in the token
 				// into the key of our object.
 				if (tokens->identity != JSON_TOKEN_STRING) {
-					fprintf(stderr, "Failed to parse the object. Expected a key!\n");
-					json_free(&value);
+					fprintf(stderr, "We did not encounter");
+					json_free(&element);
 					return NULL;
 				}
-				size_t string_length = tokens->end - tokens->start;
-				memcpy(parse_buffer, tokens->start, string_length);
-				parse_buffer[number_length] = '\0';
+				const char *key = json_string_view_to_cstring(token->start, token->end);
+				if (key == NULL) {
+					fprintf(stderr, "Failed to create the next key string. Aborting.\n");
+					json_free(&element);
+					return NULL;
+				}
 
 				tokens = tokens->next;
 				json_gobble_whitespace(&tokens);
 				if (tokens->identity != JSON_COLON) {
 					fprintf(stderr, "Failed to parse the object. Expected a colon!\n");
-					json_free(&value);
+					free(key);
+					json_free(&element);
 					return NULL;
 				}
 				tokens = tokens->next;
 				json_gobble_whitespace(&tokens);
 
-				json_value_t *object_value = json_parse(tokens);
-				if (object_value == NULL) {
+				json_value_t *value = json_parse(tokens);
+				if (value == NULL) {
 					fprintf(stderr, "The ship is sinking! NOOOOOOOO!\n");
-					json_free(&value);
+					free(key);
+					json_free(&element);
 					return NULL;
 				}
 
-				if (json_object_set(value->object, parse_buffer, object_value)) {
+				if (json_object_set(element->object, key, value)) {
 					fprintf(stderr, "Failed to put the current key-value pair into the object\n");
+					json_free(&element);
 					json_free(&value);
-					json_free(&object_value);
 					return NULL;
 				}
 
 				json_gobble_whitespace(&tokens);
-				
+
 				if (tokens->identity == JSON_TOKEN_COMMA)
 
 
-				break;
+					break;
 			case JSON_TOKEN_SQUARE_OPEN:
-				value->identity = JSON_ARRAY;
-				value->array = json_create_array();
+				element->identity = JSON_ARRAY;
+				element->array = json_create_array();
 
 
 				break;
 			case JSON_TOKEN_STRING:
-				value->identity = JSON_STRING;
-
-				size_t string_length = value->end - value->start;
-				memcpy(parse_buffer, value->start, string_length);
-				parse_buffer[number_length] = '\0';
-				
-				value->string.ptr = strdup(parse_buffer);
-				value->string.size = string_length;
+				element->identity = JSON_STRING;
+				element->string = json_string_view_to_cstring(token->start, token->end);
+				if (element->string == NULL) {
+					fprintf(stderr, "Failed to allocate a new string value!\n");
+					json_free(&element);
+					return NULL;
+				}
 				break;
 			case JSON_TOKEN_NUMBER:
-				value->identity = JSON_NUMBER;
-
-				size_t number_length = value->end - value->start;
-				memcpy(parse_buffer, value->start, number_length);
-				parse_buffer[number_length] = '\0';
-				
-				value->number = strtod(parse_buffer, NULL);
+				element->identity = JSON_NUMBER;
+				sscanf(token->start, "%lf", &element->number);
 				break;
 			case JSON_TOKEN_BOOLEAN:
-				value->identity = JSON_BOOLEAN;
-				if (tokens->start == 't')
-					value->boolean = 1;
-				else
-					value->boolean = 0;
+				element->identity = JSON_BOOLEAN;
+
+				if (strncmp(token->start, "true", 4) == 0)
+					element->boolean = 1;
+				else if (strncmp(token->start, "false", 5) == 0)
+					element->boolean = 0;
+				else {
+					fprintf(stderr, "Failed to match the boolean value in the token!\n");
+					json_free(&element);
+				}
 				break;
 			case JSON_TOKEN_NULL:
-				value->identity = JSON_NULL;
+				element->identity = JSON_NULL;
 				break;
 			case JSON_TOKEN_WHITESPACE:
 				// Skip the whitespace
@@ -666,7 +742,7 @@ void json_array_append(json_array_t *array, json_value_t *value) {
 		array->content = value;
 		return;
 	}
-	
+
 	// Now we can be sure a new array node needs to be allocated
 	json_array_t *new = malloc(sizeof *new);
 	if (new == NULL) {
@@ -705,7 +781,7 @@ void json_array_append(json_array_t *array, json_value_t *value) {
 
 	// Now emplace the new node at the end of the list
 	new->next = json_array_xor(new, previous);
-	
+
 	// Finally, link the new node with tht rest of the chain
 	previous->next = json_array_xor(new, current);
 }

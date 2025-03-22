@@ -89,10 +89,7 @@ struct json_value_t {
 
 	union {
 		double number;
-		struct {
-			const char *ptr;
-			size_t size;
-		} string;
+		const char *string;
 		int boolean;
 		json_array_t *array;
 		json_object_t *object;
@@ -120,14 +117,14 @@ extern void json_free(json_value_t **json);
 extern void json_print(json_value_t *json);
 
 // Datastructure: JSON array container routines
-extern json_array_t* json_create_array(void);
+extern json_array_t *json_create_array(void);
 extern void json_free_array(json_array_t **array);
 
 extern void json_array_append(json_array_t *array, json_value_t *value);
 extern void json_print_array(json_array_t *array);
 
 // Datastructure: JSON object container routines
-extern json_object_t* json_create_object(size_t capacity);
+extern json_object_t *json_create_object(size_t capacity);
 extern void json_free_object(json_object_t **object);
 
 extern int json_object_set(json_object_t *object, const char *key, json_value_t *value);
