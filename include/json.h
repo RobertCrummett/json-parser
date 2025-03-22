@@ -52,9 +52,9 @@ typedef enum {
 typedef struct json_token_t {
 	json_token_identity_t identity;
 
-	const char *start;
-	const char *end;
-	const char *line_start;
+	char *start;
+	char *end;
+	char *line_start;
 	struct json_token_t *next;
 } json_token_t;
 
@@ -72,7 +72,7 @@ typedef struct json_array_t {
 
 typedef struct json_keyval_t {
 	struct {
-		const char *ptr;
+		char *ptr;
 		size_t size;
 	} key;
 	json_value_t *value;
@@ -89,7 +89,7 @@ struct json_value_t {
 
 	union {
 		double number;
-		const char *string;
+		char *string;
 		int boolean;
 		json_array_t *array;
 		json_object_t *object;
@@ -110,7 +110,7 @@ extern void json_free_all_the_tokens(json_token_t **token);
 extern void json_print_tokens(json_token_t *tokens);
 
 // Parser type functions. This sucks up the tokens and outputs conglomerate data structures
-extern json_value_t *json_parser(json_token_t *tokens);
+extern json_value_t *json_parser(json_token_t **tokens);
 
 // Conglomerate datastructure: JSON routines
 extern void json_free(json_value_t **json);
@@ -127,8 +127,8 @@ extern void json_print_array(json_array_t *array);
 extern json_object_t *json_create_object(size_t capacity);
 extern void json_free_object(json_object_t **object);
 
-extern int json_object_set(json_object_t *object, const char *key, json_value_t *value);
-extern json_value_t *json_object_get(json_object_t *object, const char *key);
+extern int json_object_set(json_object_t *object, char *key, json_value_t *value);
+extern json_value_t *json_object_get(json_object_t *object, char *key);
 extern void json_print_object(json_object_t *object);
 
 #endif

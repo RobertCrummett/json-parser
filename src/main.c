@@ -33,10 +33,14 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "The JSON lexer failed to resize the dynamic array!\n");
 		return 1;
 	}
+
+	json_print_tokens(tokens);
 	
 	// Parse the token stream and output a conglomerate data structure
 	// holding all of the information from the JSON
-	json_value_t *json = json_parser(tokens);
+	json_value_t *json = json_parser(&tokens);
+
+	json_free(&json);
 
 	// Cleanup the token array at the end
 	json_free_all_the_tokens(&tokens);
