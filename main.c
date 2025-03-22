@@ -38,9 +38,9 @@ int main(int argc, char **argv) {
 	
 	// Parse the token stream and output a conglomerate data structure
 	// holding all of the information from the JSON
-	json_value_t *json = json_parser(&tokens);
-
-	json_free(&json);
+// 	json_value_t *json = json_parser(&tokens);
+// 
+// 	json_free(&json);
 
 	// Cleanup the token array at the end
 	json_free_all_the_tokens(&tokens);

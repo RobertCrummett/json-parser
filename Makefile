@@ -1,16 +1,14 @@
 CC       := cc
-CPPFLAGS := -Iinclude -MMD -MP
+CPPFLAGS := -MMD -MP
 CFLAGS   := -Wall -Wextra -Wpedantic -ggdb
 LDFLAGS  :=
 LDLIBS   := -lm
 
-SRC_DIR := src
-OBJ_DIR := obj
-BIN_DIR := bin
-EXE     := $(BIN_DIR)/app
+BIN_DIR := build
+EXE     := $(BIN_DIR)/MyApp
 
-SRC := $(wildcard $(SRC_DIR)/*.c)
-OBJ := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
+SRC := main.c json.c
+OBJ := main.o json.o
 
 .PHONY: all clean
 
@@ -19,13 +17,13 @@ all: $(EXE)
 $(EXE): $(OBJ) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
+$(OBJ_DIR)/%.o: $(SRC) | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BIN_DIR) $(OBJ_DIR):
 	mkdir -p $@
 
 clean:
-	@$(RM) -rv $(BIN_DIR) $(OBJ_DIR)
+	@$(RM) -rv $(EXE) *.o *.d
 
 -include $(OBJ:.o=.d)
