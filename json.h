@@ -1,11 +1,6 @@
 #ifndef JSON_H
 #define JSON_H
 
-// This is a convenience function for printing JSON tokens
-#ifndef JSON_FMT_TOKEN
-#define JSON_FMT_TOKEN(t) ((int)(((t).end)-((t).start))),((t).start) 
-#endif
-
 // This is the default size of the hash tables that store JSON objects.
 // Tune to your needs.
 #ifndef JSON_OBJECT_DEFAULT_SIZE
