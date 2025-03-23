@@ -8,6 +8,12 @@
 #define JSON_FMT_TOKEN(t) ((int)(((t).end)-((t).start))),((t).start) 
 #endif
 
+// This is the default size of the hash tables that store JSON objects.
+// Tune to your needs.
+#ifndef JSON_OBJECT_DEFAULT_SIZE
+#define JSON_OBJECT_DEFAULT_SIZE 4
+#endif
+
 // Size of each input chunk to be read and allocated for by json_read_entire_file_to_cstr
 // https://stackoverflow.com/questions/14002954/c-how-to-read-an-entire-file-into-a-buffer
 #ifndef JSON_READ_ENTIRE_FILE_CHUNK

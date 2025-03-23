@@ -156,32 +156,17 @@ void json_free_all_the_tokens(json_token_t **token) {
 	*token = NULL;
 }
 
-static void json_append_token_to_list(json_token_t **head_of_list, json_token_t token) {
+static void json_append_token_to_list(json_token_t **head_of_list, json_token_t *token) {
 	// Abort mission if a NULL is passed
 	// What kind of a weirdo would even try to do this!?
 	if (head_of_list == NULL)
 		return;
 
-	// Make more space on the heap for this new token
-	// we would like to append
-	json_token_t *new_token = malloc(sizeof *new_token);
-	if (new_token == NULL) {
-		fprintf(stderr, "Failed to allocate a new node for the linked list! Deleting the entire linked list!!!\n");
-		json_free_all_the_tokens(head_of_list);
-		return;
-	}
-
-	new_token->identity = token.identity;
-	new_token->start = token.start;
-	new_token->end = token.end;
-	new_token->line_start = token.line_start;
-	new_token->next = NULL;
-
 	// In this case, the list is of length zero. Logically,
 	// that means that the token will become the new head of
 	// this list.
 	if (*head_of_list == NULL)
-		*head_of_list = new_token;
+		*head_of_list = token;
 	// Otherwise, the length of the list is non zero.
 	// Iterate over the list elements until the end is found,
 	// the append the `new_token`
@@ -189,7 +174,7 @@ static void json_append_token_to_list(json_token_t **head_of_list, json_token_t 
 		json_token_t *probe = *head_of_list;
 		while (probe->next != NULL)
 			probe = probe->next;
-		probe->next = new_token;
+		probe->next = token;
 	}
 }
 
@@ -200,48 +185,51 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 	// of tagged union types to do this, because that is
 	// all I know how to do right now.
 
-	// Tokens is the linked list we will return after lexing
 	json_token_t *tokens = NULL;
 
 	// Position is the place in the JSON c string `json_data` we are while parsing
 	// Line is the line in the JSON file we are at while parsing
 	// Line start is the position of the first character of the current line in the JSON file we are parsing
-	size_t position = 0;
 	size_t line = 1;
 	char *line_start = (char *)json_data;
 
 	// While we have not yet reached the end of the JSON file...
-	while (*json_data != '\0' && position++ < json_size) {
+	while (*json_data != '\0' && json_size-- != 0) {
 		// Create a new token to ultimately append to the list of tokens
-		json_token_t token = {0};
-		token.next = NULL;
+		json_token_t *token = malloc(sizeof *token);
+		if (token == NULL) {
+			fprintf(stderr, "Failed to allocate a new token: %s\n", strerror(errno));
+			json_free_all_the_tokens(&tokens);
+			return NULL;
+		}
+		token->next = NULL;
 
 		// Because the JSON can be lexed character by character,
 		// that is what I will do! This switch case will encode all of my logic.
 		switch (*json_data) {
 			case '{':
-				token.identity = JSON_TOKEN_CURLY_OPEN;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_CURLY_OPEN;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case '}':
-				token.identity = JSON_TOKEN_CURLY_CLOSE;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_CURLY_CLOSE;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case '[':
-				token.identity = JSON_TOKEN_SQUARE_OPEN;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_SQUARE_OPEN;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case ']':
-				token.identity = JSON_TOKEN_SQUARE_CLOSE;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_SQUARE_CLOSE;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case '\n':
 				// First ncrement the line number and pointer to the start of
@@ -252,18 +240,18 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			case ' ':
 			case '\t':
 			case '\r':
-				token.identity = JSON_TOKEN_WHITESPACE;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_WHITESPACE;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case '"':
 				// We are pointing at the first quote - not
 				// the first character of the string. First
 				// increment the pointer, then we are at the
 				// starting location
-				token.identity = JSON_TOKEN_STRING;
-				token.start = (char *)++json_data;
+				token->identity = JSON_TOKEN_STRING;
+				token->start = (char *)++json_data;
 				
 				// Now continue stepping through the string until we
 				// find a quotation mark '"' that is not escaped by
@@ -273,20 +261,20 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 
 				// We now point at the final quote. This is the
 				// end of the string.
-				token.end = (char *)json_data++;
-				token.line_start = line_start;
+				token->end = (char *)json_data++;
+				token->line_start = line_start;
 				break;
 			case ':':
-				token.identity = JSON_TOKEN_COLON;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_COLON;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case ',':
-				token.identity = JSON_TOKEN_COMMA;
-				token.start = (char *)json_data;
-				token.end = (char *)++json_data;
-				token.line_start = line_start;
+				token->identity = JSON_TOKEN_COMMA;
+				token->start = (char *)json_data;
+				token->end = (char *)++json_data;
+				token->line_start = line_start;
 				break;
 			case '-':
 			case '0':
@@ -299,8 +287,8 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			case '7':
 			case '8':
 			case '9':
-				token.identity = JSON_TOKEN_NUMBER;
-				token.start = (char *)json_data;
+				token->identity = JSON_TOKEN_NUMBER;
+				token->start = (char *)json_data;
 
 				// The first four conditions being satisified means 
 				// that we are dealing with some sort of fraction 
@@ -347,13 +335,13 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 						json_data++;
 				}
 
-				token.end = (char *)json_data;
-				token.line_start = line_start;
+				token->end = (char *)json_data;
+				token->line_start = line_start;
 				break;
 			case 't':
 			case 'f':
-				token.identity = JSON_TOKEN_BOOLEAN;
-				token.start = (char *)json_data;
+				token->identity = JSON_TOKEN_BOOLEAN;
+				token->start = (char *)json_data;
 
 				// The end offset will depend on whether the
 				// boolean value is true (+4) or false (+5)
@@ -362,41 +350,75 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 				else if (*json_data == 'f')
 					json_data += 5;
 
-				token.end = (char *)json_data;
-				token.line_start = line_start;
+				token->end = (char *)json_data;
+				token->line_start = line_start;
 				break;
 			case 'n':
-				token.identity = JSON_TOKEN_NULL;
-				token.start = (char *)json_data;
+				token->identity = JSON_TOKEN_NULL;
+				token->start = (char *)json_data;
 				json_data += 4;
-				token.end = (char *)json_data;
-				token.line_start = line_start;
+				token->end = (char *)json_data;
+				token->line_start = line_start;
 				break;
 			default:
 				// If this situation is encountered, it means that an unexpected
 				// character has been found in the file. The file in this case
 				// cannot be a standard JSON file. Report this
+
 				fprintf(stderr, "Read an unexpected character on line %zu of the JSON file:\nLine %zu of the JSON file:\n\n", line, line);
+
 				// Print the entire contents of the current line
-				while (*line_start != '\n' && *line_start != '\0') {
-					fprintf(stderr, "%c", *line_start);
-					line_start++;
-				}
+				while (*line_start != '\n' && *line_start != '\0')
+					fprintf(stderr, "%c", *line_start++);
+
 				fprintf(stderr, "\n\nMake sure only standard complient JSON files are used!\n");
+
 				if (tokens != NULL)
 					json_free_all_the_tokens(&tokens);
-				return tokens;
+
+				return NULL;
 		}
 
 		// Rather than an array, I will use a linked list. This is because
 		// I want to finish this project, not be here a million years.
+		//
+		// TODO: Use a tail pointer or a dynamic array to accelerate appending
+		// TODO: Ditch the concept of a chain altogether and 
+
 		json_append_token_to_list(&tokens, token);
-		if (tokens == NULL) {
-			fprintf(stderr, "Something went really wrong while trying to append the current token to the list of tokens!\n");
-			return tokens;
-		}
 	}
+
 	return tokens;
+}
+
+void json_print_tokens(json_token_t *token) {
+	// For each token, we will test its identity and print its value
+	// to the standard output accordingly.
+	while (token != NULL) {
+		switch (token->identity) {
+			case JSON_TOKEN_STRING:
+				printf("\"%.*s\"", JSON_FMT_TOKEN(*token));
+				break;
+			case JSON_TOKEN_NUMBER:
+			case JSON_TOKEN_CURLY_OPEN:
+			case JSON_TOKEN_CURLY_CLOSE:
+			case JSON_TOKEN_SQUARE_OPEN:
+			case JSON_TOKEN_SQUARE_CLOSE:
+			case JSON_TOKEN_COLON:
+			case JSON_TOKEN_COMMA:
+			case JSON_TOKEN_BOOLEAN:
+			case JSON_TOKEN_NULL:
+			case JSON_TOKEN_WHITESPACE:
+				printf("%.*s", JSON_FMT_TOKEN(*token));
+				break;
+			default:
+				fprintf(stderr, "\nUnexpected identity code recieved: %d\n", token->identity);
+				return;
+		}
+
+		// And do not forget to step forward one token in the list!
+		token = token->next;
+	}
 }
 
 static char *json_token_identity_string(json_token_t *token) {
@@ -432,44 +454,14 @@ static char *json_token_identity_string(json_token_t *token) {
 	}
 }
 
-void json_print_tokens(json_token_t *token) {
-	// For each token, we will test its identity and print its value
-	// to the standard output accordingly.
-	while (token != NULL) {
-		switch (token->identity) {
-			case JSON_TOKEN_STRING:
-				printf("\"%.*s\"", JSON_FMT_TOKEN(*token));
-				break;
-			case JSON_TOKEN_NUMBER:
-			case JSON_TOKEN_CURLY_OPEN:
-			case JSON_TOKEN_CURLY_CLOSE:
-			case JSON_TOKEN_SQUARE_OPEN:
-			case JSON_TOKEN_SQUARE_CLOSE:
-			case JSON_TOKEN_COLON:
-			case JSON_TOKEN_COMMA:
-			case JSON_TOKEN_BOOLEAN:
-			case JSON_TOKEN_NULL:
-			case JSON_TOKEN_WHITESPACE:
-				printf("%.*s", JSON_FMT_TOKEN(*token));
-				break;
-			default:
-				fprintf(stderr, "\nUnexpected identity code recieved: %d\n", token->identity);
-				return;
-		}
-
-		// And do not forget to step forward one token in the list!
-		token = token->next;
-	}
-}
-
 static void json_print_unexpected_token(json_token_t *token, const char *anticipated) {
-	fprintf(stderr, "An unexpected token was encountered! Current line:\n");
+	fprintf(stderr, "An unexpected token was encountered! Current line:\n\n");
 	// Print the entire contents of the current line
 	while (*token->line_start != '\n' && *token->line_start != '\0') {
 		fprintf(stderr, "%c", *token->line_start);
 		token->line_start++;
 	}
-	fprintf(stderr, "\nWe expected to find a %s token, the key of a key-value pair in the current object, but instead we found a %s token\n", anticipated, json_token_identity_string(token));
+	fprintf(stderr, "\n\nWe expected to find a %s token, the key of a key-value pair in the current object, but instead we found a %s token\n", anticipated, json_token_identity_string(token));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -486,6 +478,10 @@ void json_gobble_whitespace(json_token_t **tokens) {
 	// While the identity of the current token is
 	// a whitespace and the token list is not exhausted,
 	// iterate the token list
+	//
+	// Finally, when a non whitespace token is found, the
+	// FOLLOWING token will be returned.
+
 	while (*tokens != NULL && (*tokens)->identity == JSON_TOKEN_WHITESPACE)
 		*tokens = (*tokens)->next;
 }
@@ -519,223 +515,241 @@ json_value_t *json_parser(json_token_t **tokens) {
 	if (*tokens == NULL)
 		return NULL;
 
-	// There must be productive tokens at this point.
-	// Create a new element that will store the contents
-	// held by the tokens we parse
+	// There must be productive tokens to parse at this point.
+	// Create a new element that will store the contents held by the tokens we parse
+
 	json_value_t *element = malloc(sizeof *element);
 	if (element == NULL) {
 		fprintf(stderr, "Failed to allocate space for a new element of the JSON structure: %s\n", strerror(errno));
 		return NULL;
 	}
 
-	// Parse the token
-	if (*tokens != NULL) {
-		switch ((*tokens)->identity) {
-			// In this case the element is a JSON object
-			case JSON_TOKEN_CURLY_OPEN:
-				element->identity = JSON_OBJECT;
-				element->object = json_create_object(2);
+	// Parse the token according to its identity
+	switch ((*tokens)->identity) {
+		case JSON_TOKEN_CURLY_OPEN:
+			element->identity = JSON_OBJECT;
+			element->object = json_create_object(JSON_OBJECT_DEFAULT_SIZE);
 
-				// Now step to the next token and eat up all
-				// of the optional whitespace
-				*tokens = (*tokens)->next;
-				json_gobble_whitespace(tokens);
+			// Now step to the next token and eat up all
+			// of the optional whitespace
+			*tokens = (*tokens)->next;
+			json_gobble_whitespace(tokens);
 
-				// Check if the object is empty. If it is, break
-				// out of the switch case without stepping to the next token.
-				// We step to the next token at the very end of this function.
-				if ((*tokens)->identity == JSON_TOKEN_CURLY_CLOSE)
-					break;
-
-				while (1) {
-					// We expect to see a key. On the happy path,
-					// we will simply copy the contents of the string view in the token
-					// into the key of our object.
-					if ((*tokens)->identity != JSON_TOKEN_STRING) {
-						json_print_unexpected_token(*tokens, "string");
-						json_free(&element);
-						return NULL;
-					}
-					char *key = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
-					if (key == NULL) {
-						fprintf(stderr, "Failure to allocate the key value.\n");
-						json_free(&element);
-						return NULL;
-					}
-
-					// Proceeding past the key, there should be (optional) whitespace,
-					// followed by a colon, followed by some more (optional) whitespace,
-					// and finally the value
-					*tokens = (*tokens)->next;
-					json_gobble_whitespace(tokens);
-					if ((*tokens)->identity != JSON_TOKEN_COLON) {
-						json_print_unexpected_token(*tokens, "colon \":\"");
-						json_free(&element);
-						free(key);
-						return NULL;
-					}
-					*tokens = (*tokens)->next;
-					json_gobble_whitespace(tokens);
-
-					json_value_t *value = json_parser(tokens);
-					if (value == NULL) {
-						fprintf(stderr, "Failure to parse the remaining tokens.\n");
-						json_free(&element);
-						free(key);
-						return NULL;
-					}
-
-					// Now put the key-value pair into the JSON object. Management of the memory will
-					// be up to the `element` now instead of the key and value. In fact, we should forget
-					// we even have value and key pointers at this point.
-					if (json_object_set(element->object, key, value)) {
-						fprintf(stderr, "Failed to emplace the current key-value pair into the object.\n");
-						json_free(&element);
-						json_free(&value);
-						return NULL;
-					}
-
-					// Now test if there are more values in the object or if the contents are complete.
-					json_gobble_whitespace(tokens);
-					if ((*tokens)->identity == JSON_TOKEN_COMMA) {
-						*tokens = (*tokens)->next;
-						json_gobble_whitespace(tokens);
-						continue;
-					} else if ((*tokens)->identity == JSON_TOKEN_CURLY_CLOSE) {
-						break;
-					} else {
-						json_print_unexpected_token(*tokens, "comma \",\" or closing brace \"}\"");
-						json_free(&element);
-						return NULL;
-					}
-				}
+			// Check if the object is empty. If it is, break
+			// out of the switch case without stepping to the next token.
+			// We step to the next token at the very end of this function.
+			if ((*tokens)->identity == JSON_TOKEN_CURLY_CLOSE)
 				break;
-			case JSON_TOKEN_SQUARE_OPEN:
-				element->identity = JSON_ARRAY;
-				element->array = json_create_array();
 
-				// Now step to the next token and eat up all
-				// of the optional whitespace
-				*tokens = (*tokens)->next;
-				json_gobble_whitespace(tokens);
-
-				// Check if the array is empty. If it is, break
-				// out of the switch case without stepping to the next token.
-				// We step to the next token at the very end of this function.
-				if ((*tokens)->identity == JSON_TOKEN_SQUARE_CLOSE)
-					break;
-
-				while (1) {
-					// We expect to see a value. So we can recursively call
-					// the parsing function to give use the value;
-					json_value_t *value = json_parser(tokens);
-					if (value == NULL) {
-						fprintf(stderr, "Failure to parse the remaining tokens.\n");
-						json_free(&element);
-						return NULL;
-					}
-
-					// Now add the new value to the array
-					json_array_append(element->array, value);
-					
-					// Now test if there are more values in the array or if the contents are complete.
-					json_gobble_whitespace(tokens);
-					if ((*tokens)->identity == JSON_TOKEN_COMMA) {
-						*tokens = (*tokens)->next;
-						continue;
-					} else if ((*tokens)->identity == JSON_TOKEN_SQUARE_CLOSE) {
-						break;
-					} else {
-						json_print_unexpected_token(*tokens, "comma \",\" or closing bracket \"]\"");
-						json_free(&element);
-						return NULL;
-					}
-				}
-				break;
-			case JSON_TOKEN_STRING:
-				element->identity = JSON_STRING;
-				element->string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
-				if (element->string == NULL) {
-					fprintf(stderr, "Failed to allocate a new string value!\n");
+			while (1) {
+				// We expect to see a key. On the happy path,
+				// we will simply copy the contents of the string view in the token
+				// into the key of our object.
+				if ((*tokens)->identity != JSON_TOKEN_STRING) {
+					json_print_unexpected_token(*tokens, "string");
 					json_free(&element);
 					return NULL;
 				}
-				break;
-			case JSON_TOKEN_NUMBER:
-				element->identity = JSON_NUMBER;
-				char *string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
-				if (string == NULL) {
-					fprintf(stderr, "Failed to allocate a new number value!\n");
+				char *key = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
+				if (key == NULL) {
+					fprintf(stderr, "Failed to allocate the string view as a c style string on the heap: %s\n", strerror(errno));
 					json_free(&element);
 					return NULL;
 				}
-				element->number = strtod(string, NULL);
-				break;
-			case JSON_TOKEN_BOOLEAN:
-				element->identity = JSON_BOOLEAN;
 
-				if (strncmp((*tokens)->start, "true", 4) == 0)
-					element->boolean = 1;
-				else if (strncmp((*tokens)->start, "false", 5) == 0)
-					element->boolean = 0;
+				// Proceeding past the key, there should be (optional) whitespace,
+				// followed by a colon, followed by some more (optional) whitespace,
+				// and finally the value
+				*tokens = (*tokens)->next;
+				json_gobble_whitespace(tokens);
+				if ((*tokens)->identity != JSON_TOKEN_COLON) {
+					json_print_unexpected_token(*tokens, "colon \":\"");
+					json_free(&element);
+					free(key);
+					return NULL;
+				}
+				*tokens = (*tokens)->next;
+				json_gobble_whitespace(tokens);
+
+				json_value_t *value = json_parser(tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Failed to parse the tokens.\nNULL returned from `json_parser` while parsing the elements of a JSON object.\nBubbling up...\n");
+					json_free(&element);
+					free(key);
+					return NULL;
+				}
+
+				// Now put the key-value pair into the JSON object. Management of the memory will
+				// be up to the `element` now instead of the key and value. In fact, we should forget
+				// we even have value and key pointers at this point.
+				if (json_object_set(element->object, key, value)) {
+					fprintf(stderr, "Failed to emplace the current key-value pair into the object.\n");
+					json_free(&element);
+					json_free(&value);
+					free(key);
+					return NULL;
+				}
+
+				// Now test if there are more values in the object or if the contents are complete.
+				json_gobble_whitespace(tokens);
+				if ((*tokens)->identity == JSON_TOKEN_COMMA) {
+					*tokens = (*tokens)->next;
+					json_gobble_whitespace(tokens);
+					continue;
+				} else if ((*tokens)->identity == JSON_TOKEN_CURLY_CLOSE)
+					break;
 				else {
-					fprintf(stderr, "Failed to match the boolean value in the token!\n");
+					json_print_unexpected_token(*tokens, "comma \",\" or closing brace \"}\"");
 					json_free(&element);
+					return NULL;
 				}
+			}
+			break;
+		case JSON_TOKEN_SQUARE_OPEN:
+			element->identity = JSON_ARRAY;
+			element->array = json_create_array();
+
+			// Now step to the next token and eat up all
+			// of the optional whitespace
+			*tokens = (*tokens)->next;
+			json_gobble_whitespace(tokens);
+
+			// Check if the array is empty. If it is, break
+			// out of the switch case without stepping to the next token.
+			// We step to the next token at the very end of this function.
+			if ((*tokens)->identity == JSON_TOKEN_SQUARE_CLOSE)
 				break;
-			case JSON_TOKEN_NULL:
-				element->identity = JSON_NULL;
-				break;
-			case JSON_TOKEN_WHITESPACE:
-				break;
-			default:
-				fprintf(stderr, "Unexpected identity code recieved: %d\n", (*tokens)->identity);
+
+			while (1) {
+				// We expect to see a value. So we can recursively call
+				// the parsing function to give use the value;
+				json_value_t *value = json_parser(tokens);
+				if (value == NULL) {
+					fprintf(stderr, "Failed to parse the tokens.\nNULL returned from `json_parser` while parsing the elements of a JSON array.\nBubbling up...\n");
+					json_free(&element);
+					return NULL;
+				}
+
+				// Now add the new value to the array
+				json_array_append(element->array, value);
+
+				// Now test if there are more values in the array or if the contents are complete.
+				json_gobble_whitespace(tokens);
+				if ((*tokens)->identity == JSON_TOKEN_COMMA) {
+					*tokens = (*tokens)->next;
+					continue;
+				} else if ((*tokens)->identity == JSON_TOKEN_SQUARE_CLOSE)
+					break;
+				else {
+					json_print_unexpected_token(*tokens, "comma \",\" or closing bracket \"]\"");
+					json_free(&element);
+					return NULL;
+				}
+			}
+			break;
+
+		case JSON_TOKEN_STRING:
+			element->identity = JSON_STRING;
+			element->string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
+			if (element->string == NULL) {
+				fprintf(stderr, "Failed to allocate the string view as a c style string on the heap: %s\n", strerror(errno));
 				json_free(&element);
 				return NULL;
-		}
-		// And do not forget to step forward one token in the list!
-		*tokens = (*tokens)->next;
+			}
+			break;
+
+		case JSON_TOKEN_NUMBER:
+			element->identity = JSON_NUMBER;
+			char *string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
+			if (string == NULL) {
+				fprintf(stderr, "Failed to allocate the string view as a c style string on the heap: %s\n", strerror(errno));
+				json_free(&element);
+				return NULL;
+			}
+			element->number = strtod(string, NULL);
+			break;
+
+		case JSON_TOKEN_BOOLEAN:
+			element->identity = JSON_BOOLEAN;
+
+			if (strncmp((*tokens)->start, "true", 4) == 0)
+				element->boolean = 1;
+			else if (strncmp((*tokens)->start, "false", 5) == 0)
+				element->boolean = 0;
+			else {
+				fprintf(stderr, "Failed to parse a boolean token.\nExpected \"true\" or \"false\", but got \"%.5s\".\n", (*tokens)->start);
+				json_free(&element);
+				return NULL;
+			}
+			break;
+
+		case JSON_TOKEN_NULL:
+			element->identity = JSON_NULL;
+			break;
+
+		default:
+			fprintf(stderr, "Unexpected identity code encountered while parsing. Token type is \"%s\"\n"
+					"This most likely means that the JSON file is not in standard format.\n", json_token_identity_string(*tokens));
+			json_print_unexpected_token(*tokens, "[null, boolean, number, string, open braces, open bracket]");
+			json_free(&element);
+			return NULL;
 	}
+
+	// And do not forget to step forward one token in the list!
+	*tokens = (*tokens)->next;
 	return element;
 }
 
 void json_free(json_value_t **json) {
+	// This is the user interface level free function designed to
+	// free heterogeneous JSON data structures (arbitrarily nested
+	// `json_value_t`).
 	if (json == NULL || *json == NULL)
 		return;
 
+	// Based on what type of node we are dealing with, suballocate
+	// the job of freeing accordingly and recusively call ourselves
+	// until we hit strings, numbers, null, or booleans.
 	switch ((*json)->identity) {
 		case JSON_OBJECT:
 			json_free_object(&(*json)->object);
-			*json = NULL;
 			break;
 		case JSON_ARRAY:
 			json_free_array(&(*json)->array);
-			*json = NULL;
 			break;
 		case JSON_STRING:
-			if ((*json)->string != NULL)
-				free((char *)(*json)->string);
+			if ((*json)->string != NULL) {
+				free((*json)->string);
+				(*json)->string = NULL;
+			}
 			free(*json);
-			*json = NULL;
 			break;
 		case JSON_NUMBER:
 			free(*json);
-			*json = NULL;
 			break;
 		case JSON_BOOLEAN:
 			free(*json);
-			*json = NULL;
 			break;
 		case JSON_NULL:
 			free(*json);
-			*json = NULL;
 			break;
 		default:
-			fprintf(stderr, "Failed trying to free the JSON value because an unexpected identity code was encountered\n");
-			break;
+			// DO NOT return the NULL pointer in the case of an unexpected value.
+			// This is so that we can examine it and check as to whether or not
+			// there is any dynamically allocated memory associated with it.
+			fprintf(stderr, "Failed trying to free the JSON value because an unexpected `json_value_t` identity code was encountered: identity = %d\n", (*json)->identity);
+			return;
 	}
+		
+	// Finally, return the NULL pointer
+	*json = NULL;
 }
 
+// This is a simple printing function for heterogeneous JSON
+// data structures, `json_value_t`'s. This function does not
+// yet support pretty printing, i.e., tabs and such for nesting.
+//
+// TODO: Implement pretty printing.
 void json_print(json_value_t *json) {
 	if (json == NULL)
 		return;
@@ -754,10 +768,7 @@ void json_print(json_value_t *json) {
 			printf("%lf", json->number);
 			break;
 		case JSON_BOOLEAN:
-			if (json->boolean)
-				printf("true");
-			else
-				printf("false");
+			printf("%s", json->boolean ? "true" : "false");
 			break;
 		case JSON_NULL:
 			printf("null");
