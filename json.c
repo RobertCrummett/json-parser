@@ -1125,6 +1125,11 @@ static json_value_t *json_parser(json_token_t **tokens) {
 			break;
 
 		case JSON_TOKEN_NUMBER:
+			// Currently, I allocate and free every time
+			// that I need to create a number! This is inefficient,
+			// but I have not figured out a more reliable way
+			//
+			// TODO: Transfer char* to string without allocating heap space
 			element->identity = JSON_NUMBER;
 			char *string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
 			if (string == NULL) {
@@ -1133,14 +1138,16 @@ static json_value_t *json_parser(json_token_t **tokens) {
 				return NULL;
 			}
 			element->number = strtod(string, NULL);
+			free(string);
 			break;
 
 		case JSON_TOKEN_BOOLEAN:
 			element->identity = JSON_BOOLEAN;
+			size_t size = (*tokens)->end - (*tokens)->start;
 
-			if (strncmp((*tokens)->start, "true", 4) == 0)
+			if (size == 4 && strncmp((*tokens)->start, "true", size) == 0)
 				element->boolean = 1;
-			else if (strncmp((*tokens)->start, "false", 5) == 0)
+			else if (size == 5 && strncmp((*tokens)->start, "false", size) == 0)
 				element->boolean = 0;
 			else {
 				fprintf(stderr, "Failed to parse a boolean token.\nExpected \"true\" or \"false\", but got \"%.5s\".\n", (*tokens)->start);
