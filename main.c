@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
 	if (argc == 2)
 		json_path = argv[1];
 	else
-		json_path = "share/ex01.json";
+		json_path = "../../../share/test.json";
 
 	char *json_data = NULL;
 	size_t json_size = 0;
@@ -33,16 +33,22 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "The JSON lexer failed to resize the dynamic array!\n");
 		return 1;
 	}
-
-	json_print_tokens(tokens);
+	json_token_t* head = tokens;
 	
 	// Parse the token stream and output a conglomerate data structure
 	// holding all of the information from the JSON
-// 	json_value_t *json = json_parser(&tokens);
-// 
-// 	json_free(&json);
+ 	json_value_t *json = json_parser(&tokens);
+ 
+	char* key = "A";
+	json_value_t *v = json_object_get(json->object, key);
+	printf("%s => %s\n", key, v->string);
+
+ 	json_free(&json);
+
+	// Lets Print This Thang!
+	json_print_tokens(head);
 
 	// Cleanup the token array at the end
-	json_free_all_the_tokens(&tokens);
+	json_free_all_the_tokens(&head);
 	return 0;
 }

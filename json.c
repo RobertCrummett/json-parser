@@ -10,7 +10,7 @@ void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) 
 	// Make sure that the vaues of data and size are not NULL,
 	// otherwise I will accidentally dereference a NULL pointers
 	if (data == NULL || size == NULL) {
-		fprintf(stderr, "The data (%p) and/or size (%p) cannot be NULL\n", (void *)*data, (void *)size);
+		fprintf(stderr, "The data (%p) and/or size (%p) cannot be NULL\n", data, (void *)size);
 		return;
 	}
 
@@ -222,25 +222,25 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			case '{':
 				token.identity = JSON_TOKEN_CURLY_OPEN;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case '}':
 				token.identity = JSON_TOKEN_CURLY_CLOSE;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case '[':
 				token.identity = JSON_TOKEN_SQUARE_OPEN;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case ']':
 				token.identity = JSON_TOKEN_SQUARE_CLOSE;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case '\n':
@@ -254,7 +254,7 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			case '\r':
 				token.identity = JSON_TOKEN_WHITESPACE;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case '"':
@@ -273,19 +273,19 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 
 				// We now point at the final quote. This is the
 				// end of the string.
-				token.end = (char *)json_data;
+				token.end = (char *)json_data++;
 				token.line_start = line_start;
 				break;
 			case ':':
 				token.identity = JSON_TOKEN_COLON;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case ',':
 				token.identity = JSON_TOKEN_COMMA;
 				token.start = (char *)json_data;
-				token.end = (char *)json_data + 1;
+				token.end = (char *)++json_data;
 				token.line_start = line_start;
 				break;
 			case '-':
@@ -311,17 +311,19 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 				// number until we hit something weird like a
 				// '.', 'e', or 'E', or end of JSON number
 				if (*json_data == '-' && json_data[1] == '0')
-					;
+					json_data++;
 				else if (*json_data == '0' && json_data[1] == '.')
-					;
+					json_data++;
 				else if (*json_data == '0' && json_data[1] == 'e')
-					;
+					json_data++;
 				else if (*json_data == '0' && json_data[1] == 'E')
-					;
-				else if (*json_data >= '1' && *json_data <= '9')
+					json_data++;
+				else if (*json_data >= '1' && *json_data <= '9') {
+					json_data++;
 					// Loop over digits until non digit is found
-					if (*json_data >= '0' && *json_data <= '9')
+					while (*json_data >= '0' && *json_data <= '9')
 						json_data++;
+				}
 
 				// Question: are you a fraction?
 				if (*json_data == '.') {
@@ -343,7 +345,7 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 					// Loop over digits until non digit is found
 					while (*json_data >= '0' && *json_data <= '9')
 						json_data++;
-				}	
+				}
 
 				token.end = (char *)json_data;
 				token.line_start = line_start;
@@ -393,9 +395,6 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			fprintf(stderr, "Something went really wrong while trying to append the current token to the list of tokens!\n");
 			return tokens;
 		}
-
-		// Increment the pointer and keep it moving
-		json_data++;
 	}
 	return tokens;
 }
@@ -664,7 +663,13 @@ json_value_t *json_parser(json_token_t **tokens) {
 				break;
 			case JSON_TOKEN_NUMBER:
 				element->identity = JSON_NUMBER;
-				sscanf((*tokens)->start, "%lf", &element->number);
+				char *string = json_string_view_to_cstring((*tokens)->start, (*tokens)->end);
+				if (string == NULL) {
+					fprintf(stderr, "Failed to allocate a new number value!\n");
+					json_free(&element);
+					return NULL;
+				}
+				element->number = strtod(string, NULL);
 				break;
 			case JSON_TOKEN_BOOLEAN:
 				element->identity = JSON_BOOLEAN;
@@ -1008,10 +1013,10 @@ static int json_object_expand(json_object_t *object) {
 	// scale it up - we need to reset the size to some
 	// minimum default value. Otherwise, simply scale
 	// the capacity by a fixed constant.
-	size_t new_capacity = object->capacity < 2 ? 16 : object->capacity;
+	size_t new_capacity = object->capacity < 2 ? 16 : 2 * object->capacity;
 
 	// Check for wrap around in size_t
-	if (new_capacity < object->capacity) {
+	if (new_capacity <= object->capacity) {
 		fprintf(stderr, "table capacity is too large to fit in size_t\n");
 		return 1;
 	}
