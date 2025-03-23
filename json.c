@@ -6,7 +6,90 @@
 #include <string.h>
 #include "json.h"
 
-void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) {
+// This enum will encode the type of token
+// that the lexer will produce. Each meaningful
+// element of a JSON can only take one of these
+// values at a time.
+typedef enum {
+	JSON_TOKEN_STRING = 200,
+	JSON_TOKEN_NUMBER,
+	JSON_TOKEN_CURLY_OPEN,
+	JSON_TOKEN_CURLY_CLOSE,
+	JSON_TOKEN_SQUARE_OPEN,
+	JSON_TOKEN_SQUARE_CLOSE,
+	JSON_TOKEN_COLON,
+	JSON_TOKEN_COMMA,
+	JSON_TOKEN_BOOLEAN,
+	JSON_TOKEN_NULL,
+	JSON_TOKEN_WHITESPACE
+} json_token_identity_t;
+
+// This enum will store the value of the 
+// JSON object that the parser emits.
+typedef enum {
+	JSON_OBJECT = 100,
+	JSON_ARRAY,
+	JSON_STRING,
+	JSON_NUMBER,
+	JSON_BOOLEAN,
+	JSON_NULL
+} json_value_identity_t;
+
+////////////////////////////////////////////////////////////////////////////////
+//                                  Containers
+////////////////////////////////////////////////////////////////////////////////
+
+// A token will be stored in this data structure.
+// The goal of our lexer is to translate an array
+// of these tokens. The start end end pointers record
+// where in the original JSON file the token starts
+// and ends --- this could be used for error formatting
+// when we get to cross that bridge.
+typedef struct json_token_t {
+	json_token_identity_t identity;
+
+	char *start;
+	char *end;
+	char *line_start;
+	struct json_token_t *next;
+} json_token_t;
+
+typedef struct json_array_t {
+	struct json_array_t *next;
+	json_value_t *content;
+} json_array_t;
+
+typedef struct json_keyval_t {
+	struct {
+		char *ptr;
+		size_t size;
+	} key;
+	json_value_t *value;
+} json_keyval_t;
+
+typedef struct json_object_t {
+	size_t count;
+	size_t capacity;
+	json_keyval_t *content;
+} json_object_t;
+
+struct json_value_t {
+	json_value_identity_t identity;
+
+	union {
+		double number;
+		char *string;
+		int boolean;
+		json_array_t *array;
+		json_object_t *object;
+	};
+};
+
+////////////////////////////////////////////////////////////////////////////////
+//                                File Handling
+////////////////////////////////////////////////////////////////////////////////
+
+static void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) {
 	// Make sure that the vaues of data and size are not NULL,
 	// otherwise I will accidentally dereference a NULL pointers
 	if (data == NULL || size == NULL) {
@@ -124,10 +207,393 @@ void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) 
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+//                                 List
+////////////////////////////////////////////////////////////////////////////////
+
+static json_array_t *json_array_xor(json_array_t *a, json_array_t *b) {
+	return (json_array_t *)((uintptr_t)a ^ (uintptr_t)b);
+}
+
+static void json_array_next(json_array_t **previous, json_array_t **current) {
+	json_array_t *temporary = json_array_xor(*previous, (*current)->next);
+	*previous = *current;
+	*current = temporary;
+}
+
+static json_array_t *json_create_array(void) {
+	json_array_t *array = malloc(sizeof *array);
+	if (array == NULL) {
+		fprintf(stderr, "Failed to allocate a new array");
+	}
+	array->next = NULL;
+	array->content = NULL;
+
+	return array;
+}
+
+static void json_array_append(json_array_t *array, json_value_t *value) {
+	if (array == NULL || value == NULL)
+		return;
+
+	// If there are no nodes in the array, we can simply let 
+	// the value be the first element of the array
+	if (array->next == NULL && array->content == NULL) {
+		array->content = value;
+		return;
+	}
+
+	// Now we can be sure a new array node needs to be allocated
+	json_array_t *new = malloc(sizeof *new);
+	if (new == NULL) {
+		fprintf(stderr, "Failed to create a new array node!\n");
+		return;
+	}
+	new->content = value;
+
+	// If there is only one node in the array, then the node's
+	// next pointer is NULL. In this case, make the new node's
+	// next point to the array node and the array node's next point
+	// to the new node
+	if (array->next == NULL) {
+		array->next = json_array_xor(new, array);
+		new->next   = json_array_xor(new, array);
+		return;
+	}
+
+	// If there is more than one node in the array, we need to
+	// iterate down the array until we find the end (ie, where
+	// the previous node equals the the current node)
+	json_array_t *previous = array;
+	json_array_t *current = array;
+
+	// Make the first step down the linked list
+	json_array_next(&previous, &current);
+
+	// Iterate until you reach the end of the list
+	while (previous != current)
+		json_array_next(&previous, &current);
+
+	// Now iterate one more time, so current points
+	// at the second to last element and previous
+	// points at the last element
+	json_array_next(&previous, &current);
+
+	// Now emplace the new node at the end of the list
+	new->next = json_array_xor(new, previous);
+
+	// Finally, link the new node with tht rest of the chain
+	previous->next = json_array_xor(new, current);
+}
+
+static void json_print_array(json_array_t *array) {
+	if (array == NULL)
+		return;
+
+	printf("[");
+
+	// This is the empty array case
+	if (array->content == NULL && array->next == NULL) {
+		printf("]\n");
+		return;
+	}
+
+	// This is the one node case
+	if (array->next == NULL) {
+		json_print(array->content);
+		printf("]\n");
+		return;
+	}
+
+	// This is the multi node case
+	printf("\n");
+	json_array_t *previous = array;
+	json_array_t *current = array;
+
+	// Now step down the linked-list,
+	// each time printing the value of
+	// the previous array node.
+	json_array_next(&previous, &current);
+	while (previous != current) {
+		json_print(previous->content);
+		printf(",\n");
+		json_array_next(&previous, &current);
+	}
+	json_print(previous->content);
+	printf("\n]\n");
+}
+
+static void json_free_array(json_array_t **array) {
+	if (array == NULL || *array == NULL)
+		return;
+
+	json_array_t *temporary = NULL;
+	json_array_t *previous = *array;
+	json_array_t *current = *array;
+
+	// Make the first step down the linked list
+	json_array_next(&previous, &current);
+
+	// When the previous is the same as the pointer,
+	// we know we have hit the end of the list.
+	// This is the due to the invariant condition
+	// of the XOR operation. While we have not
+	// yet hit the end, free the trailing node (previous).
+	while (previous != current) {
+		temporary = previous;
+		json_array_next(&previous, &current);
+		// Recursively free whatever the array actually holds
+		json_free(&temporary->content);
+		free(temporary);
+	}
+
+	// Now that we are done freeing the array,
+	// only the final node remains. Delete that sucker.
+	free(previous);
+	*array = NULL;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//                              Hash Table
+////////////////////////////////////////////////////////////////////////////////
+
+static uint64_t json_hash_string_view(const char *view, size_t size) {
+	// This is the FNV-1a hash algorithm for 64-bit hashes.
+	// Simple and effective is why I choose to use it.
+
+	// Recommended start value for FNV-1a hash algorithm
+	uint64_t hash = 1099511628211ULL;
+	const uint8_t *data = (const uint8_t *)view;
+
+	// For each octet of data to be hashed...
+	for (size_t i = 0; i < size; i++)
+		hash = (hash ^ data[i]) * 14695981039346656037ULL; // The magic number is the FNV-1a 64-bit offset basis
+	return hash;
+}
+
+static int json_comp_string_view(const char *view_a, const char *view_b, size_t size) {
+	// Compare the value of two string views character by character
+	for (size_t i = 0; i < size; i++)
+		if (view_a[i] != view_b[i])
+			return 0;
+	return 1;
+}
+
+static double json_object_current_load(json_object_t *object) {
+	// This function returns the current load of the
+	// hash table, which is defined as the amount of
+	// elements in the table (count) divided by the
+	// amount of room (capacity) in the table
+	return (double)object->count / object->capacity;
+}
+
+static int json_object_needs_to_expand(json_object_t *object) {
+	// If the load factor of the object exceeds 0.75,
+	// or whatever hardcoded threshold that is set, then
+	// we should expand the table. Otherwise return false.
+	return (json_object_current_load(object) > 0.75) ? 1 : 0;
+}
+
+static json_object_t* json_create_object(size_t capacity) {
+	// Create a new object that is completely empty of size `capacity`
+
+	// Allocate the new object
+	json_object_t* object = malloc(sizeof *object);
+	if (object == NULL) {
+		fprintf(stderr, "Failed to create a new object: %s\n", strerror(errno));
+		return NULL;
+	}
+	object->count = 0;
+	object->capacity = capacity;
+
+	// Allocate the contents that the object manages.
+	json_keyval_t* content = calloc(capacity, sizeof *content);
+	if (content == NULL) {
+		fprintf(stderr, "Failed to create the content of the new object: %s\n", strerror(errno));
+		free(object);
+		return NULL;
+	}
+	object->content = content;
+
+	// Make sure that all of the keys point to NULL
+	// so that we indicate that they are all empty.
+	for (size_t i = 0; i < capacity; i++)
+		object->content[i].key.ptr = NULL;
+
+	return object;
+}
+
+static void json_free_object(json_object_t **object) {
+	// Free the entire object, recursively calling JSON free to
+	// free the key-value contents
+	if (object == NULL || *object == NULL)
+		return;
+
+	for (size_t i = 0; i < (*object)->capacity; i++) {
+		// Check if the value exists - if it does,
+		// free it. We do this by first freeing
+		// the key string and then freeing the
+		// value.
+		if ((*object)->content[i].key.ptr != NULL) {
+			free((*object)->content[i].key.ptr);
+			json_free(&(*object)->content[i].value);
+		}
+	}
+
+	// Now free the array holding all of the freed key value pairs
+	free((*object)->content);
+
+	// Now free the object
+	free(*object);
+}
+
+static int json_object_expand(json_object_t *object) {
+	// First, a new capacity for the table is selected.
+	// If the object capacity is 0 or 1, then we cannot
+	// scale it up - we need to reset the size to some
+	// minimum default value. Otherwise, simply scale
+	// the capacity by a fixed constant.
+	size_t new_capacity = object->capacity < 2 ? 16 : 2 * object->capacity;
+
+	// Check for wrap around in size_t
+	if (new_capacity <= object->capacity) {
+		fprintf(stderr, "table capacity is too large to fit in size_t\n");
+		return 1;
+	}
+
+	// Allocate memory for the new hash table. This storage will
+	// replace the table's current contents once the values inside
+	// the current storage are rehashed into this new table
+	json_keyval_t *new_content = calloc(new_capacity, sizeof *new_content);
+	if (new_content == NULL) {
+		fprintf(stderr, "Failed to allocate new space during the table rehashing\n");
+		return 1;
+	}
+
+	// Linearly step through object contens and rehash each
+	// key value pair. Then place the rehashed key
+	// value pair into the new table space.
+	for (size_t j = 0; j < object->capacity; j++) {
+		json_keyval_t bucket = object->content[j];
+
+		// Test if the key exists
+		if (bucket.key.ptr != NULL) {
+			// Compute the 64-bit hash of the bucket's key to get
+			// an index into the content array
+			uint64_t hash = json_hash_string_view(bucket.key.ptr, bucket.key.size);
+			uint64_t index = hash % new_capacity;
+
+			// Insert the bucket into the new content memory at the new index
+			while (1) {
+				// Check if the bucket is space is available
+				if (new_content[index].key.ptr == NULL) {
+					new_content[index] = bucket;
+					break;
+				} else
+					// The hash collided.
+					// This cannot possibly be a duplicate key value because the contents
+					// we are moving into the new table are table entries themselves.
+					//
+					// Collision resolution is currently accomplished via linear probing
+					index = (index + 1) % new_capacity; 
+			}
+		}
+	}
+	// Remove the old table contents and replace
+	// the with the rehashed, expanded contents.
+	free(object->content);
+	object->capacity = new_capacity;
+	object->content = new_content;
+	return 0;
+}
+
+static int json_object_set(json_object_t *object, char *key, json_value_t *value) {
+	// Since we are adding elements to the table, we first need
+	// to see whether or not the table needs to expand
+	if (json_object_needs_to_expand(object))
+		if (json_object_expand(object)) { 
+			fprintf(stderr, "Failed to expand the JSON object\n");
+			return 1;
+		}
+
+	// Compute the 64-bit hash of the bucket's key to get
+	// an index into the table content
+	uint64_t hash = json_hash_string_view(key, strlen(key));
+	uint64_t index = hash % object->capacity;
+
+	// Now that we have a hash and know that there is adequate room
+	// in the table, we can put the key-value pair into the table
+	while (1) {
+		if (object->content[index].key.ptr == NULL) {
+			object->content[index].key.ptr = key;
+			object->content[index].key.size = strlen(key);
+			object->content[index].value = value; 
+			object->count++;
+			break;
+		} else {
+			if (json_comp_string_view(object->content[index].key.ptr, key, object->content[index].key.size))
+				// The key is a duplicate. No need to do anything.
+				break;
+			else
+				// The hash collided.
+				// Collision resolution is currently accomplished via linear probing
+				index = (index + 1) % object->capacity; 
+		}
+	}
+
+	return 0;
+}
+
+static json_value_t *json_object_get(json_object_t *object, char *key) {
+	// Compute the 64-bit hash of the key to get an index into the table
+	uint64_t hash = json_hash_string_view(key, strlen(key));
+	uint64_t index = hash % object->capacity;
+
+	// Search for the value in the table
+	while (1) {
+		// If the value indexed is NULL at any point, then the value
+		// does not exist in the table. Return NULL in this case.
+		if (object->content[index].key.ptr == NULL)
+			return NULL;
+		else {
+			if (json_comp_string_view(object->content[index].key.ptr, key, object->content[index].key.size))
+				// The key exists and we have found it. Return the value.
+				return object->content[index].value;
+			else
+				// The key may exist, but this is not the correct value.
+				// The hash has collided. Continue search by linearly probing.
+				index = (index + 1) % object->capacity; 
+		}
+	}
+}
+
+static void json_print_object(json_object_t *object) {
+	if (object == NULL)
+		return;
+
+	// This is the empty object
+	if (object->count == 0)
+		printf("{}\n");
+
+	// Otherwise, there are elements
+	printf("{\n");
+
+	// We will loop over the entire hash table and
+	// print the keys & values that are present
+	for (size_t i = 0; i < object->capacity; i++) {
+		if (object->content[i].key.ptr != NULL) {
+			printf("\t%.*s : ", (int)object->content[i].key.size, object->content[i].key.ptr);
+			json_print(object->content[i].value);
+			printf("\n");
+		}
+	}
+	printf("}\n");
+}
+
+////////////////////////////////////////////////////////////////////////////////
 //                                Lexer
 ////////////////////////////////////////////////////////////////////////////////
 
-void json_free_all_the_tokens(json_token_t **token) {
+static void json_free_all_the_tokens(json_token_t **token) {
 	// No need to dereference the NULL pointer
 	// if it ends up being passed. Just silently
 	// return and note that this function is not
@@ -178,7 +644,7 @@ static void json_append_token_to_list(json_token_t **head_of_list, json_token_t 
 	}
 }
 
-json_token_t *json_lexer(const char *json_data, size_t json_size) {
+static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 	// This is the JSON lexer. Its job is to translate
 	// the string data in `json_data` into a list of tokens
 	// that the parser can read. We will use a linked list
@@ -391,7 +857,7 @@ json_token_t *json_lexer(const char *json_data, size_t json_size) {
 	return tokens;
 }
 
-void json_print_tokens(json_token_t *token) {
+static void json_print_tokens(json_token_t *token) {
 	// For each token, we will test its identity and print its value
 	// to the standard output accordingly.
 	while (token != NULL) {
@@ -468,7 +934,7 @@ static void json_print_unexpected_token(json_token_t *token, const char *anticip
 //                                Parser
 ////////////////////////////////////////////////////////////////////////////////
 
-void json_gobble_whitespace(json_token_t **tokens) {
+static void json_gobble_whitespace(json_token_t **tokens) {
 	// Make sure NULL was not passed in. Although
 	// this is not unreasonable, we do not want to
 	// accidentally dereference it.
@@ -504,7 +970,7 @@ static char *json_string_view_to_cstring(char *start, char *end) {
 	return cstring;
 }
 
-json_value_t *json_parser(json_token_t **tokens) {
+static json_value_t *json_parser(json_token_t **tokens) {
 	// If there are no tokens, there is no work to do
 	if (tokens == NULL || *tokens == NULL)
 		return NULL;
@@ -778,385 +1244,39 @@ void json_print(json_value_t *json) {
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//                                 List
-////////////////////////////////////////////////////////////////////////////////
+json_value_t *json_load(const char *path) {
+	char *data = NULL;
+	size_t size = 0;
 
-static json_array_t *json_array_xor(json_array_t *a, json_array_t *b) {
-	return (json_array_t *)((uintptr_t)a ^ (uintptr_t)b);
-}
-
-static void json_array_next(json_array_t **previous, json_array_t **current) {
-	json_array_t *temporary = json_array_xor(*previous, (*current)->next);
-	*previous = *current;
-	*current = temporary;
-}
-
-json_array_t *json_create_array(void) {
-	json_array_t *array = malloc(sizeof *array);
-	if (array == NULL) {
-		fprintf(stderr, "Failed to allocate a new array");
-	}
-	array->next = NULL;
-	array->content = NULL;
-
-	return array;
-}
-
-void json_array_append(json_array_t *array, json_value_t *value) {
-	if (array == NULL || value == NULL)
-		return;
-
-	// If there are no nodes in the array, we can simply let 
-	// the value be the first element of the array
-	if (array->next == NULL && array->content == NULL) {
-		array->content = value;
-		return;
-	}
-
-	// Now we can be sure a new array node needs to be allocated
-	json_array_t *new = malloc(sizeof *new);
-	if (new == NULL) {
-		fprintf(stderr, "Failed to create a new array node!\n");
-		return;
-	}
-	new->content = value;
-
-	// If there is only one node in the array, then the node's
-	// next pointer is NULL. In this case, make the new node's
-	// next point to the array node and the array node's next point
-	// to the new node
-	if (array->next == NULL) {
-		array->next = json_array_xor(new, array);
-		new->next   = json_array_xor(new, array);
-		return;
-	}
-
-	// If there is more than one node in the array, we need to
-	// iterate down the array until we find the end (ie, where
-	// the previous node equals the the current node)
-	json_array_t *previous = array;
-	json_array_t *current = array;
-
-	// Make the first step down the linked list
-	json_array_next(&previous, &current);
-
-	// Iterate until you reach the end of the list
-	while (previous != current)
-		json_array_next(&previous, &current);
-
-	// Now iterate one more time, so current points
-	// at the second to last element and previous
-	// points at the last element
-	json_array_next(&previous, &current);
-
-	// Now emplace the new node at the end of the list
-	new->next = json_array_xor(new, previous);
-
-	// Finally, link the new node with tht rest of the chain
-	previous->next = json_array_xor(new, current);
-}
-
-void json_print_array(json_array_t *array) {
-	if (array == NULL)
-		return;
-
-	printf("[");
-
-	// This is the empty array case
-	if (array->content == NULL && array->next == NULL) {
-		printf("]\n");
-		return;
-	}
-
-	// This is the one node case
-	if (array->next == NULL) {
-		json_print(array->content);
-		printf("]\n");
-		return;
-	}
-
-	// This is the multi node case
-	printf("\n");
-	json_array_t *previous = array;
-	json_array_t *current = array;
-
-	// Now step down the linked-list,
-	// each time printing the value of
-	// the previous array node.
-	json_array_next(&previous, &current);
-	while (previous != current) {
-		json_print(previous->content);
-		printf(",\n");
-		json_array_next(&previous, &current);
-	}
-	json_print(previous->content);
-	printf("\n]\n");
-}
-
-void json_free_array(json_array_t **array) {
-	if (array == NULL || *array == NULL)
-		return;
-
-	json_array_t *temporary = NULL;
-	json_array_t *previous = *array;
-	json_array_t *current = *array;
-
-	// Make the first step down the linked list
-	json_array_next(&previous, &current);
-
-	// When the previous is the same as the pointer,
-	// we know we have hit the end of the list.
-	// This is the due to the invariant condition
-	// of the XOR operation. While we have not
-	// yet hit the end, free the trailing node (previous).
-	while (previous != current) {
-		temporary = previous;
-		json_array_next(&previous, &current);
-		// Recursively free whatever the array actually holds
-		json_free(&temporary->content);
-		free(temporary);
-	}
-
-	// Now that we are done freeing the array,
-	// only the final node remains. Delete that sucker.
-	free(previous);
-	*array = NULL;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-//                              Hash Table
-////////////////////////////////////////////////////////////////////////////////
-
-static uint64_t json_hash_string_view(const char *view, size_t size) {
-	// This is the FNV-1a hash algorithm for 64-bit hashes.
-	// Simple and effective is why I choose to use it.
-
-	// Recommended start value for FNV-1a hash algorithm
-	uint64_t hash = 1099511628211ULL;
-	const uint8_t *data = (const uint8_t *)view;
-
-	// For each octet of data to be hashed...
-	for (size_t i = 0; i < size; i++)
-		hash = (hash ^ data[i]) * 14695981039346656037ULL; // The magic number is the FNV-1a 64-bit offset basis
-	return hash;
-}
-
-static int json_comp_string_view(const char *view_a, const char *view_b, size_t size) {
-	// Compare the value of two string views character by character
-	for (size_t i = 0; i < size; i++)
-		if (view_a[i] != view_b[i])
-			return 0;
-	return 1;
-}
-
-static double json_object_current_load(json_object_t *object) {
-	// This function returns the current load of the
-	// hash table, which is defined as the amount of
-	// elements in the table (count) divided by the
-	// amount of room (capacity) in the table
-	return (double)object->count / object->capacity;
-}
-
-static int json_object_needs_to_expand(json_object_t *object) {
-	// If the load factor of the object exceeds 0.75,
-	// or whatever hardcoded threshold that is set, then
-	// we should expand the table. Otherwise return false.
-	return (json_object_current_load(object) > 0.75) ? 1 : 0;
-}
-
-json_object_t* json_create_object(size_t capacity) {
-	// Create a new object that is completely empty of size `capacity`
-
-	// Allocate the new object
-	json_object_t* object = malloc(sizeof *object);
-	if (object == NULL) {
-		fprintf(stderr, "Failed to create a new object: %s\n", strerror(errno));
+	json_read_entire_file_to_cstr(path, &data, &size);
+	if (data == NULL && size == 0) {
+		fprintf(stderr, "Failed to read %s into memory: %s\n", path, strerror(errno));
 		return NULL;
 	}
-	object->count = 0;
-	object->capacity = capacity;
 
-	// Allocate the contents that the object manages.
-	json_keyval_t* content = calloc(capacity, sizeof *content);
-	if (content == NULL) {
-		fprintf(stderr, "Failed to create the content of the new object: %s\n", strerror(errno));
-		free(object);
+	// Tokenize the JSON string and output the contents into the token_array.
+	// This function may fail while resizing the JSON token array.
+	// If it does, it will a null array.
+	json_token_t *tokens = json_lexer(data, size);
+	if (tokens == NULL) {
+		fprintf(stderr, "The JSON lexer failed to tokenize %s: %s\n", (char *)path, strerror(errno));
+		free(data);
 		return NULL;
 	}
-	object->content = content;
-
-	// Make sure that all of the keys point to NULL
-	// so that we indicate that they are all empty.
-	for (size_t i = 0; i < capacity; i++)
-		object->content[i].key.ptr = NULL;
-
-	return object;
-}
-
-void json_free_object(json_object_t **object) {
-	// Free the entire object, recursively calling JSON free to
-	// free the key-value contents
-	if (object == NULL || *object == NULL)
-		return;
-
-	for (size_t i = 0; i < (*object)->capacity; i++) {
-		// Check if the value exists - if it does,
-		// free it. We do this by first freeing
-		// the key string and then freeing the
-		// value.
-		if ((*object)->content[i].key.ptr != NULL) {
-			free((char *)(*object)->content[i].key.ptr);
-			json_free(&(*object)->content[i].value);
-		}
+	json_token_t* head = tokens;
+	
+	// Parse the token stream and output a conglomerate data structure
+	// holding all of the information from the JSON
+ 	json_value_t *json = json_parser(&tokens);
+	if (json == NULL) {
+		fprintf(stderr, "The JSON lexer failed to parse %s: %s\n", (char *)path, strerror(errno));
+		json_free_all_the_tokens(&head);
+		free(data);
+		return NULL;
 	}
 
-	// Now free the array holding all of the freed key value pairs
-	free((*object)->content);
-
-	// Now free the object
-	free(*object);
-}
-
-static int json_object_expand(json_object_t *object) {
-	// First, a new capacity for the table is selected.
-	// If the object capacity is 0 or 1, then we cannot
-	// scale it up - we need to reset the size to some
-	// minimum default value. Otherwise, simply scale
-	// the capacity by a fixed constant.
-	size_t new_capacity = object->capacity < 2 ? 16 : 2 * object->capacity;
-
-	// Check for wrap around in size_t
-	if (new_capacity <= object->capacity) {
-		fprintf(stderr, "table capacity is too large to fit in size_t\n");
-		return 1;
-	}
-
-	// Allocate memory for the new hash table. This storage will
-	// replace the table's current contents once the values inside
-	// the current storage are rehashed into this new table
-	json_keyval_t *new_content = calloc(new_capacity, sizeof *new_content);
-	if (new_content == NULL) {
-		fprintf(stderr, "Failed to allocate new space during the table rehashing\n");
-		return 1;
-	}
-
-	// Linearly step through object contens and rehash each
-	// key value pair. Then place the rehashed key
-	// value pair into the new table space.
-	for (size_t j = 0; j < object->capacity; j++) {
-		json_keyval_t bucket = object->content[j];
-
-		// Test if the key exists
-		if (bucket.key.ptr != NULL) {
-			// Compute the 64-bit hash of the bucket's key to get
-			// an index into the content array
-			uint64_t hash = json_hash_string_view(bucket.key.ptr, bucket.key.size);
-			uint64_t index = hash % new_capacity;
-
-			// Insert the bucket into the new content memory at the new index
-			while (1) {
-				// Check if the bucket is space is available
-				if (new_content[index].key.ptr == NULL) {
-					new_content[index] = bucket;
-					break;
-				} else
-					// The hash collided.
-					// This cannot possibly be a duplicate key value because the contents
-					// we are moving into the new table are table entries themselves.
-					//
-					// Collision resolution is currently accomplished via linear probing
-					index = (index + 1) % new_capacity; 
-			}
-		}
-	}
-	// Remove the old table contents and replace
-	// the with the rehashed, expanded contents.
-	free(object->content);
-	object->capacity = new_capacity;
-	object->content = new_content;
-	return 0;
-}
-
-int json_object_set(json_object_t *object, char *key, json_value_t *value) {
-	// Since we are adding elements to the table, we first need
-	// to see whether or not the table needs to expand
-	if (json_object_needs_to_expand(object))
-		if (json_object_expand(object)) { 
-			fprintf(stderr, "Failed to expand the JSON object\n");
-			return 1;
-		}
-
-	// Compute the 64-bit hash of the bucket's key to get
-	// an index into the table content
-	uint64_t hash = json_hash_string_view(key, strlen(key));
-	uint64_t index = hash % object->capacity;
-
-	// Now that we have a hash and know that there is adequate room
-	// in the table, we can put the key-value pair into the table
-	while (1) {
-		if (object->content[index].key.ptr == NULL) {
-			object->content[index].key.ptr = key;
-			object->content[index].key.size = strlen(key);
-			object->content[index].value = value; 
-			object->count++;
-			break;
-		} else {
-			if (json_comp_string_view(object->content[index].key.ptr, key, object->content[index].key.size))
-				// The key is a duplicate. No need to do anything.
-				break;
-			else
-				// The hash collided.
-				// Collision resolution is currently accomplished via linear probing
-				index = (index + 1) % object->capacity; 
-		}
-	}
-
-	return 0;
-}
-
-json_value_t *json_object_get(json_object_t *object, char *key) {
-	// Compute the 64-bit hash of the key to get an index into the table
-	uint64_t hash = json_hash_string_view(key, strlen(key));
-	uint64_t index = hash % object->capacity;
-
-	// Search for the value in the table
-	while (1) {
-		// If the value indexed is NULL at any point, then the value
-		// does not exist in the table. Return NULL in this case.
-		if (object->content[index].key.ptr == NULL)
-			return NULL;
-		else {
-			if (json_comp_string_view(object->content[index].key.ptr, key, object->content[index].key.size))
-				// The key exists and we have found it. Return the value.
-				return object->content[index].value;
-			else
-				// The key may exist, but this is not the correct value.
-				// The hash has collided. Continue search by linearly probing.
-				index = (index + 1) % object->capacity; 
-		}
-	}
-}
-
-void json_print_object(json_object_t *object) {
-	if (object == NULL)
-		return;
-
-	// This is the empty object
-	if (object->count == 0)
-		printf("{}\n");
-
-	// Otherwise, there are elements
-	printf("{\n");
-
-	// We will loop over the entire hash table and
-	// print the keys & values that are present
-	for (size_t i = 0; i < object->capacity; i++) {
-		if (object->content[i].key.ptr != NULL) {
-			printf("\t%.*s : ", (int)object->content[i].key.size, object->content[i].key.ptr);
-			json_print(object->content[i].value);
-			printf("\n");
-		}
-	}
-	printf("}\n");
+	// Cleanup time
+	json_free_all_the_tokens(&head);
+	free(data);
+	return json;
 }

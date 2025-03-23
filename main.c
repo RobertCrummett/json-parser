@@ -1,54 +1,16 @@
-#include <errno.h>
+#define _CRT_SECURE_NO_WARNINGS
 #include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "json.h"
 
 int main(int argc, char **argv) {
 	// We are going to begin by reading the contents of a file into a string
 	// If the returned data is NULL and the size is 0, then there was some
 	// sort of error reading the file into the string.
-	char *json_path = {0};
-	if (argc == 2)
-		json_path = argv[1];
-	else
-		json_path = "../../../share/test.json";
+	const char *path = "../../../share/ex05.json";
 
-	char *json_data = NULL;
-	size_t json_size = 0;
+	json_value_t *json = json_load(path);
 
-	json_read_entire_file_to_cstr(json_path, &json_data, &json_size);
-	if (json_data == NULL || json_size == 0) {
-		fprintf(stderr, "Faild to read %s into memory: %s\n", json_path, strerror(errno));
-		return 1;
-	}
-
-	// Tokenize the JSON string and output the contents into the token_array.
-	// This function may fail while resizing the JSON token array.
-	// If it does, it will a null array.
-	json_token_t *tokens = json_lexer(json_data, json_size);
-	if (tokens == NULL) {
-		fprintf(stderr, "The JSON lexer failed to resize the dynamic array!\n");
-		return 1;
-	}
-	json_token_t* head = tokens;
-	
-	// Parse the token stream and output a conglomerate data structure
-	// holding all of the information from the JSON
- 	json_value_t *json = json_parser(&tokens);
- 
-	char* key = "A";
-	json_value_t *v = json_object_get(json->object, key);
-	printf("%s => %s\n", key, v->string);
-
- 	json_free(&json);
-
-	// Lets Print This Thang!
-	json_print_tokens(head);
-
-	// Cleanup the token array at the end
-	json_free_all_the_tokens(&head);
+	if (json != NULL)
+		json_print(json);
 	return 0;
 }
