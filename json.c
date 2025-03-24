@@ -74,6 +74,35 @@ struct json_value_t {
 	} value;
 };
 
+/* Because strndup is not standardized in any version of C before '23,
+   I need to have my own strndup routine for portability */
+static size_t json_strnlen(const char* src, size_t n) {
+	size_t len = 0;
+	while (len < n && src[len])
+		len++;
+	return len;
+}
+
+static char *json_strndup(const char* s, size_t n) {
+	size_t len = json_strnlen(s, n);
+	char *p = (char *)malloc(len + 1);
+	if (p) {
+		memcpy(p, s, len);
+		p[len] = '\0';
+	}
+	return p;
+}
+
+static char *json_strdup(const char* s) {
+	size_t len = strlen(s);
+	char *p = (char*)malloc(len + 1);
+	if (p) {
+		memcpy(p, s, len);
+		p[len] = '\0';
+	}
+	return p;
+}
+
 static void json_read_entire_file_to_cstr(const char *path, char **data, size_t *size) {
 	/* The `temp` storage will hold the result of `realloc` until
 	   I have verified that `realloc` has not failed for some reason.
@@ -506,7 +535,7 @@ static int json_object_set(json_object_t *object, char *key, json_value_t *value
 	   in the table, we can put the key-value pair into the table */
 	while (1) {
 		if (object->content[index].key == NULL) {
-			object->content[index].key = strdup(key); /* now key owns its own string */
+			object->content[index].key = json_strdup(key); /* now key owns its own string */
 			object->content[index].value = value; 
 			object->count++;
 			break;
@@ -659,27 +688,27 @@ static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 		switch (*json_data) {
 			case '{':
 				token->identity = JSON_TOKEN_CURLY_OPEN;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case '}':
 				token->identity = JSON_TOKEN_CURLY_CLOSE;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case '[':
 				token->identity = JSON_TOKEN_SQUARE_OPEN;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case ']':
 				token->identity = JSON_TOKEN_SQUARE_CLOSE;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case ':':
 				token->identity = JSON_TOKEN_COLON;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case ',':
 				token->identity = JSON_TOKEN_COMMA;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case '\n':
 				/* First ncrement the line number and pointer to the start of
@@ -691,7 +720,7 @@ static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 			case '\t':
 			case '\r':
 				token->identity = JSON_TOKEN_WHITESPACE;
-				token->cstr = strndup(json_data++, 1);
+				token->cstr = json_strndup(json_data++, 1);
 				break;
 			case '"':
 				/* We are pointing at the first quote - not
@@ -709,7 +738,7 @@ static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 
 				/* We now point at the final quote. This is the
 				   end of the string. */
-				token->cstr = strndup(start, json_data++ - start);
+				token->cstr = json_strndup(start, json_data++ - start);
 				break;
 
 			case '-': case '0': case '1': case '2': case '3': case '4':
@@ -763,7 +792,7 @@ static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 						json_data++;
 				}
 
-				token->cstr = strndup(start, json_data - start);
+				token->cstr = json_strndup(start, json_data - start);
 				break;
 			case 't':
 			case 'f':
@@ -772,17 +801,17 @@ static json_token_t *json_lexer(const char *json_data, size_t json_size) {
 				/* The end offset will depend on whether the
 				   boolean value is true (+4) or false (+5) */
 				if (*json_data == 't') {
-					token->cstr = strndup(json_data, 4);
+					token->cstr = json_strndup(json_data, 4);
 					json_data += 4;
 				} else if (*json_data == 'f') {
-					token->cstr = strndup(json_data, 5);
+					token->cstr = json_strndup(json_data, 5);
 					json_data += 5;
 				}
 
 				break;
 			case 'n':
 				token->identity = JSON_TOKEN_NULL;
-				token->cstr = strndup(json_data, 4);
+				token->cstr = json_strndup(json_data, 4);
 				json_data += 4;
 				break;
 			default:
@@ -1049,7 +1078,7 @@ static json_value_t *json_parser(json_token_t **tokens) {
 
 		case JSON_TOKEN_STRING:
 			element->identity = JSON_STRING;
-			element->value.string = strdup((*tokens)->cstr); /* This way, the token still owns its own string and the */
+			element->value.string = json_strdup((*tokens)->cstr); /* This way, the token still owns its own string and the */
 			break;                                      /* element owns its own string. */
 
 		case JSON_TOKEN_NUMBER:
