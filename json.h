@@ -88,7 +88,7 @@ struct json_value {
 
 static const char *json_buffer = {0};
 
-json_value *json__parse_value();
+static json_value *json__parse_value();
 
 static void json__skip_whitespace() {
     while(isspace(*json_buffer))
